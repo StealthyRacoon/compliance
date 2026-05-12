@@ -1,0 +1,31 @@
+{
+  "name": "compliance",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "api/app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "nodemon app.js",
+    "worker": "nodemon workers/worker.js",
+    "scheduler": "nodemon scheduler/scheduler.js"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.13.1",
+    "@azure/msal-node": "^5.2.1",
+    "axios": "^1.16.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "msal": "^1.4.18",
+    "p-queue": "^9.2.0",
+    "pg": "^8.20.0",
+    "pino": "^10.3.1",
+    "sqlite3": "^6.0.1",
+    "uuid": "^14.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
