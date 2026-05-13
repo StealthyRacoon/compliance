@@ -6,85 +6,33 @@ const {sqlite} = require("../db/db");
 
 async function claimJob() {
 
-    return new Promise((resolve, reject) => {
+    const job = await db.get(`
+        UPDATE jobs
+        SET status = 'running',
+            attempts = attempts + 1,
+            updated_at = datetime('now')
+        WHERE id = (
+            SELECT id
+            FROM jobs
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT 1
+        )
+        RETURNING *
+    `);
 
-        sqlite.serialize(() => {
+    if (!job) return null;
 
-            sqlite.run(
-                "BEGIN IMMEDIATE TRANSACTION",
-                (beginErr) => {
+    try {
+        job.payload = job.payload
+            ? JSON.parse(job.payload)
+            : {};
+    } catch {
+        job.payload = {};
+    }
 
-                    if (beginErr) {
-                        return reject(beginErr);
-                    }
-
-                    sqlite.get(`
-                        SELECT *
-                        FROM jobs
-                        WHERE status = 'pending'
-                        ORDER BY created_at ASC
-                        LIMIT 1
-                    `, [], (selectErr, job) => {
-
-                        if (selectErr) {
-
-                            sqlite.run("ROLLBACK");
-
-                            return reject(selectErr);
-                        }
-
-                        if (!job) {
-
-                            sqlite.run("COMMIT");
-
-                            return resolve(null);
-                        }
-
-                        sqlite.run(`
-                            UPDATE jobs
-                            SET status = 'running',
-                                attempts = attempts + 1,
-                                updated_at = datetime('now')
-                            WHERE id = ?
-                              AND status = 'pending'
-                        `, [job.id], function (updateErr) {
-
-                            if (updateErr) {
-
-                                sqlite.run("ROLLBACK");
-
-                                return reject(updateErr);
-                            }
-
-                            // another worker got it
-                            if (this.changes === 0) {
-
-                                sqlite.run("ROLLBACK");
-
-                                return resolve(null);
-                            }
-
-                            sqlite.run("COMMIT", (commitErr) => {
-
-                                if (commitErr) {
-                                    return reject(commitErr);
-                                }
-
-                                job.payload =
-                                    job.payload
-                                        ? JSON.parse(job.payload)
-                                        : {};
-
-                                resolve(job);
-                            });
-                        });
-                    });
-                }
-            );
-        });
-    });
+    return job;
 }
-
 
 // --------------------------------------------------
 

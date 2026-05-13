@@ -10,6 +10,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "nodemon app.js",
     "worker": "nodemon workers/worker.js",
+    "enrichment": "nodemon workers/enrichWorker.js",
     "scheduler": "nodemon scheduler/scheduler.js"
   },
   "dependencies": {
