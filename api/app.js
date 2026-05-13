@@ -1,10 +1,6 @@
 const express = require("express");
 const { createJob } = require("../core/jobs");
 
-const errorHandler = require("../middleware/errorHandler");
-const asyncHandler = require("../middleware/asyncHandler");
-const requestLogger = require("../middleware/requestLogger");
-
 
 const app = express();
 
@@ -60,9 +56,14 @@ app.post("/discover/start", async (req, res) => {
     }
 });
 
-app.use(errorHandler);
 
-app.use(requestLogger);
+app.use((err, req, res, next) => {
+    console.error(err);
+
+    res.status(500).json({
+        error: err.message || "Internal Server Error"
+    });
+});
 
 
 // --------------------------------------------------

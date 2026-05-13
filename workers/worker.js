@@ -1,7 +1,6 @@
 const db = require("../db/db");
 const path = require("path");
 
-const logger = require("../utils/logger");
 const graph = require("../utils/graph");
 
 const { claimJob, completeJob, failJob } = require("../core/jobs");
@@ -65,11 +64,7 @@ async function loop() {
 
                 console.error("🔥 PROCESS JOB FAILED:", err);
 
-                logger.error("processJob failed", {
-                    jobId: job.id,
-                    error: err.message,
-                    stack: err.stack
-                });
+
 
                 await failJob(job.id, err.message);
                 continue;
@@ -77,12 +72,8 @@ async function loop() {
 
             if (!result || result.success === false) {
 
-                console.error("❌ JOB FAILED:", result?.error);
+                console.log("❌ JOB FAILED:", result);
 
-                logger.error("job execution failed", {
-                    jobId: job.id,
-                    error: result?.error
-                });
 
                 await failJob(job.id, result?.error || "Unknown failure");
                 continue;
@@ -95,11 +86,6 @@ async function loop() {
         } catch (err) {
 
             console.error("🔥 WORKER LOOP CRASH:", err);
-
-            logger.error("worker loop crash", {
-                error: err.message,
-                stack: err.stack
-            });
 
             await new Promise(r => setTimeout(r, 2000));
         }

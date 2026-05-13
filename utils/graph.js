@@ -81,7 +81,22 @@ async function graphGetAllPages(url) {
     return results;
 }
 
+async function graphPost(url, body) {
+
+    const token = await getAccessToken();
+
+    const res = await axios.post(url, body, {
+        headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json"
+        }
+    });
+
+    return res.data;
+}
+
 module.exports = {
     graphGet,
-    graphGetAllPages
+    graphGetAllPages,
+    graphPost
 };

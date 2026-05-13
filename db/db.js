@@ -41,10 +41,12 @@ sqlite.serialize(() => {
             status TEXT NOT NULL DEFAULT 'pending',
             payload TEXT,
             attempts INTEGER DEFAULT 0,
+            scan_run_id TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
+        );
     `);
+
 
     sqlite.run(`
         CREATE TABLE IF NOT EXISTS sites (
@@ -52,8 +54,9 @@ sqlite.serialize(() => {
             display_name TEXT,
             web_url TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
+        );
     `);
+
 
     sqlite.run(`
         CREATE TABLE IF NOT EXISTS drives (
@@ -64,8 +67,68 @@ sqlite.serialize(() => {
             delta_link TEXT,
             status TEXT DEFAULT 'pending',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
+        );
     `);
+
+
+    sqlite.run(`
+        CREATE TABLE IF NOT EXISTS scan_runs (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running',
+            started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT,
+            metadata TEXT
+        );
+    `);
+
+
+    sqlite.run(`
+        CREATE TABLE IF NOT EXISTS files (
+            file_id TEXT PRIMARY KEY,
+            drive_id TEXT,
+            site_id TEXT,
+
+            name TEXT,
+            path TEXT,
+            mime_type TEXT,
+            size INTEGER,
+            last_modified TEXT,
+            raw_data TEXT,
+            metadata TEXT,
+
+            status TEXT, -- new | compliant | non_compliant | deleted
+
+            last_seen_run_id TEXT,
+            last_scanned_at TEXT
+        );
+    `);
+
+
+    sqlite.run(`
+        CREATE TABLE IF NOT EXISTS scan_events (
+            id TEXT PRIMARY KEY,
+            scan_run_id TEXT,
+            site_id TEXT,
+            drive_id TEXT,
+            file_id TEXT,
+
+            event_type TEXT, -- discovered | scanned | updated | deleted | compliance_changed
+
+            old_status TEXT,
+            new_status TEXT,
+
+            file_name TEXT,
+            file_path TEXT,
+            mime_type TEXT,
+            size INTEGER,
+
+            metadata TEXT,
+
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+
 
     sqlite.run(`
         CREATE TABLE IF NOT EXISTS script_registry (
@@ -77,8 +140,56 @@ sqlite.serialize(() => {
             config TEXT,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
+        );
     `);
+    /*
+     
+            INSERT OR IGNORE INTO script_registry (
+                job_type,
+                script_path,
+                enabled,
+                version,
+                description
+            )
+            VALUES (
+                'discover_sites',
+                './scripts/discoverSites.js',
+                1,
+                'v1',
+                'Initial site discovery from Microsoft Graph'`);
+    
+        
+            INSERT OR IGNORE INTO script_registry (
+                job_type,
+                script_path,
+                enabled,
+                version,
+                description
+            )
+            VALUES (
+                'discover_drives',
+                './scripts/discoverDrives.js',
+                1,
+                'v1',
+                'Discovers document libraries (drives) for a site'`);
+    
+        
+            INSERT OR IGNORE INTO script_registry (
+                job_type,
+                script_path,
+                enabled,
+                version,
+                description
+            )
+            VALUES (
+                'scan_drive',
+                './scripts/scanDrive.js',
+                1,
+                'v1',
+                'Scans all files in a drive and writes compliance events'`);
+    */
+
+
 });
 
 // --------------------------------------------------

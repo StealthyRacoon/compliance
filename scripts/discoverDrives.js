@@ -1,10 +1,10 @@
-const logger = require("../utils/logger");
 const { graphGetAllPages } = require("../utils/graph");
-
+const { v4: uuid } = require("uuid");
 
 module.exports = async function run(job, { db }) {
 
     const siteId = job.payload.siteId;
+    const scanRunId = job.scan_run_id;
 
     if (!siteId) {
         return {
@@ -30,6 +30,10 @@ module.exports = async function run(job, { db }) {
 
             try {
 
+                // --------------------------------------------------
+                // UPSERT DRIVE (current snapshot only)
+                // --------------------------------------------------
+
                 await db.execute(`
                     INSERT INTO drives (
                         drive_id,
@@ -50,18 +54,47 @@ module.exports = async function run(job, { db }) {
                     drive.webUrl || null
                 ]);
 
+                // --------------------------------------------------
+                // CHECK FOR EXISTING SCAN JOB
+                // --------------------------------------------------
+
+                const existingJob = await db.get(`
+                    SELECT id
+                    FROM jobs
+                    WHERE type = 'scan_drive'
+                      AND status IN ('pending', 'running')
+                      AND json_extract(payload, '$.driveId') = ?
+                    LIMIT 1
+                `, [drive.id]);
+
+                if (existingJob) continue;
+
+                // --------------------------------------------------
+                // CREATE SCAN_DRIVE JOB (linked to scan run)
+                // --------------------------------------------------
+
+                await db.execute(`
+                    INSERT INTO jobs (
+                        id,
+                        type,
+                        status,
+                        payload,
+                        scan_run_id
+                    )
+                    VALUES (?, 'scan_drive', 'pending', ?, ?)
+                `, [
+                    uuid(),
+                    JSON.stringify({
+                        siteId,
+                        driveId: drive.id
+                    }),
+                    scanRunId
+                ]);
+
                 processed++;
 
             } catch (err) {
-
-                console.error("🔥 DRIVE INSERT FAILED:", err);
-
-                logger.error("Drive insert failed", {
-                    jobId: job.id,
-                    driveId: drive?.id,
-                    error: err.message,
-                    stack: err.stack
-                });
+                console.error("🔥 DRIVE PROCESS FAILED:", err);
             }
         }
 
@@ -69,6 +102,7 @@ module.exports = async function run(job, { db }) {
             success: true,
             data: {
                 siteId,
+                scanRunId,
                 drivesFound: drives?.length || 0,
                 drivesProcessed: processed
             }
@@ -77,13 +111,6 @@ module.exports = async function run(job, { db }) {
     } catch (err) {
 
         console.error("🔥 SCRIPT FAILED:", err);
-
-        logger.error("discover_drives failed", {
-            jobId: job.id,
-            siteId,
-            error: err.message,
-            stack: err.stack
-        });
 
         return {
             success: false,
