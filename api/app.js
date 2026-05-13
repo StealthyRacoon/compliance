@@ -1,5 +1,7 @@
 const express = require("express");
 const { createJob } = require("../core/jobs");
+const dotenv = require("dotenv");
+dotenv.config();
 
 
 const app = express();

@@ -1,28 +1,28 @@
 const { graphGetAllPages } = require("../utils/graph");
 const { v4: uuid } = require("uuid");
 
-module.exports = async function run(job, { db }) {
+module.exports = async function run(job, { db, payload }) {
 
-    const siteId = job.payload.siteId;
+    const site_id = payload.site_id;
     const scanRunId = job.scan_run_id;
 
-    if (!siteId) {
+    if (!site_id) {
         return {
             success: false,
-            error: "Missing siteId",
+            error: "Missing site_id",
             data: null
         };
     }
 
     try {
 
-        console.log("▶ Discover drives running for site:", siteId);
+        console.log("▶ Discover drives running for site:", site_id);
 
         const drives = await graphGetAllPages(
-            `https://graph.microsoft.com/v1.0/sites/${siteId}/drives`
+            `https://graph.microsoft.com/v1.0/sites/${site_id}/drives`
         );
 
-        console.log("DRIVES FOUND:", drives?.length || 0);
+        console.log("📀 DRIVES FOUND:", drives?.length || 0);
 
         let processed = 0;
 
@@ -31,7 +31,7 @@ module.exports = async function run(job, { db }) {
             try {
 
                 // --------------------------------------------------
-                // UPSERT DRIVE (current snapshot only)
+                // UPSERT DRIVE
                 // --------------------------------------------------
 
                 await db.execute(`
@@ -49,13 +49,13 @@ module.exports = async function run(job, { db }) {
                         web_url = excluded.web_url
                 `, [
                     drive.id,
-                    siteId,
+                    site_id,
                     drive.name || null,
                     drive.webUrl || null
                 ]);
 
                 // --------------------------------------------------
-                // CHECK FOR EXISTING SCAN JOB
+                // CHECK FOR EXISTING JOB
                 // --------------------------------------------------
 
                 const existingJob = await db.get(`
@@ -63,14 +63,14 @@ module.exports = async function run(job, { db }) {
                     FROM jobs
                     WHERE type = 'scan_drive'
                       AND status IN ('pending', 'running')
-                      AND json_extract(payload, '$.driveId') = ?
+                      AND json_extract(payload, '$.drive_id') = ?
                     LIMIT 1
                 `, [drive.id]);
 
                 if (existingJob) continue;
 
                 // --------------------------------------------------
-                // CREATE SCAN_DRIVE JOB (linked to scan run)
+                // CREATE SCAN JOB
                 // --------------------------------------------------
 
                 await db.execute(`
@@ -85,8 +85,9 @@ module.exports = async function run(job, { db }) {
                 `, [
                     uuid(),
                     JSON.stringify({
-                        siteId,
-                        driveId: drive.id
+                        site_id,
+                        drive_id: drive.id,
+                        delta_link: null
                     }),
                     scanRunId
                 ]);
@@ -94,14 +95,15 @@ module.exports = async function run(job, { db }) {
                 processed++;
 
             } catch (err) {
-                console.error("🔥 DRIVE PROCESS FAILED:", err);
+
+                console.error("🔥 DRIVE PROCESS FAILED:", err.message);
             }
         }
 
         return {
             success: true,
             data: {
-                siteId,
+                site_id,
                 scanRunId,
                 drivesFound: drives?.length || 0,
                 drivesProcessed: processed
@@ -115,7 +117,7 @@ module.exports = async function run(job, { db }) {
         return {
             success: false,
             error: err.message,
-            data: { siteId }
+            data: { site_id }
         };
     }
 };

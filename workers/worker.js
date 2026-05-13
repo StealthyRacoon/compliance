@@ -1,97 +1,68 @@
 const db = require("../db/db");
 const path = require("path");
-
-const graph = require("../utils/graph");
-
 const { claimJob, completeJob, failJob } = require("../core/jobs");
 
+// --------------------------------------------------
+// WORKER LOOP (NO CONCURRENCY, NO GRAPH LOGIC)
+// --------------------------------------------------
 
+async function run() {
 
-async function processJob(job) {
-
-    const registry = await db.get(`
-        SELECT *
-        FROM script_registry
-        WHERE job_type = ?
-          AND enabled = 1
-    `, [job.type]);
-
-    if (!registry) {
-        throw new Error(`No script registered for job type: ${job.type}`);
-    }
-
-    const scriptPath = path.resolve(registry.script_path);
-
-    console.log("▶ Loading script:", scriptPath);
-
-    const runScript = require(scriptPath);
-
-    const result = await runScript(job, {
-        db
-    });
-
-    return {
-        jobId: job.id,
-        type: job.type,
-        success: result?.success ?? false,
-        data: result?.data,
-        error: result?.error
-    };
-}
-
-async function loop() {
+    console.log("🚀 Worker started");
 
     while (true) {
 
-        try {
+        let job = null;
 
-            const job = await claimJob();
+        try {
+            job = await claimJob();
 
             if (!job) {
-                await new Promise(r => setTimeout(r, 1000));
+                await new Promise(r => setTimeout(r, 500));
                 continue;
             }
 
-            console.log("CLAIMED JOB:", job.id, job.type);
+            console.log(`📦 Job claimed: ${job.id} (${job.type})`);
 
-            let result;
+            const registry = await db.get(`
+                SELECT script_path
+                FROM script_registry
+                WHERE job_type = ?
+                  AND enabled = 1
+            `, [job.type]);
 
-            try {
-                result = await processJob(job);
-                console.log("✔ PROCESS RESULT:", result);
-
-            } catch (err) {
-
-                console.error("🔥 PROCESS JOB FAILED:", err);
-
-
-
-                await failJob(job.id, err.message);
-                continue;
+            if (!registry) {
+                throw new Error(`No script registered for ${job.type}`);
             }
+
+            const scriptPath = path.resolve(registry.script_path);
+
+            console.log("▶ Running script:", scriptPath);
+
+            const runScript = require(scriptPath);
+
+            const result = await runScript(job, {
+                db,
+                payload: job.payload
+            });
 
             if (!result || result.success === false) {
-
-                console.log("❌ JOB FAILED:", result);
-
-
-                await failJob(job.id, result?.error || "Unknown failure");
-                continue;
+                throw new Error(result?.error || "Job failed");
             }
 
             await completeJob(job.id);
 
-            console.log("✔ JOB COMPLETED:", job.id);
+            console.log(`✅ Job completed: ${job.id}`);
 
         } catch (err) {
 
-            console.error("🔥 WORKER LOOP CRASH:", err);
+            console.error("❌ Job error:", err.message);
 
-            await new Promise(r => setTimeout(r, 2000));
+            if (job?.id) {
+                await failJob(job.id, err.message);
+            }
         }
     }
 }
 
-console.log("Worker started");
-
-loop();
+run();

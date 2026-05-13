@@ -22,11 +22,15 @@ module.exports = async function run(job, { db }) {
     // FETCH SITES
     // --------------------------------------------------
 
-    const sites = await graphGetAllPages(
+    const raw = await graphGetAllPages(
         "https://graph.microsoft.com/v1.0/sites/getAllSites"
     );
 
-    const filtered = (sites ?? []).filter(
+    const sites = Array.isArray(raw)
+        ? raw
+        : (raw?.value ?? []);
+
+    const filtered = sites.filter(
         s => !s.webUrl?.includes("/personal/")
     );
 
@@ -77,7 +81,7 @@ module.exports = async function run(job, { db }) {
         `, [
             uuid(),
             JSON.stringify({
-                siteId: site.id
+                site_id: site.id
             }),
             runId
         ]);

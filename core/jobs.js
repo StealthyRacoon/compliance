@@ -1,100 +1,118 @@
 const db = require("../db/db");
-const { v4: uuid } = require("uuid");
+const {sqlite} = require("../db/db");
 
-// --------------------------------------------------
-// CREATE JOB
-// --------------------------------------------------
 
-async function createJob(type, payload = {}) {
-
-    const id = uuid();
-
-    await db.execute(`
-        INSERT INTO jobs (
-            id,
-            type,
-            status,
-            payload
-        )
-        VALUES (?, ?, 'pending', ?)
-    `, [
-        id,
-        type,
-        JSON.stringify(payload)
-    ]);
-
-    return id;
-}
-
-// --------------------------------------------------
-// CLAIM JOB
 // --------------------------------------------------
 
 async function claimJob() {
 
-    const job = await db.get(`
-        SELECT *
-        FROM jobs
-        WHERE status = 'pending'
-        ORDER BY created_at ASC
-        LIMIT 1
-    `);
+    return new Promise((resolve, reject) => {
 
-    if (!job) {
-        return null;
-    }
+        sqlite.serialize(() => {
 
-    await db.execute(`
+            sqlite.run(
+                "BEGIN IMMEDIATE TRANSACTION",
+                (beginErr) => {
+
+                    if (beginErr) {
+                        return reject(beginErr);
+                    }
+
+                    sqlite.get(`
+                        SELECT *
+                        FROM jobs
+                        WHERE status = 'pending'
+                        ORDER BY created_at ASC
+                        LIMIT 1
+                    `, [], (selectErr, job) => {
+
+                        if (selectErr) {
+
+                            sqlite.run("ROLLBACK");
+
+                            return reject(selectErr);
+                        }
+
+                        if (!job) {
+
+                            sqlite.run("COMMIT");
+
+                            return resolve(null);
+                        }
+
+                        sqlite.run(`
+                            UPDATE jobs
+                            SET status = 'running',
+                                attempts = attempts + 1,
+                                updated_at = datetime('now')
+                            WHERE id = ?
+                              AND status = 'pending'
+                        `, [job.id], function (updateErr) {
+
+                            if (updateErr) {
+
+                                sqlite.run("ROLLBACK");
+
+                                return reject(updateErr);
+                            }
+
+                            // another worker got it
+                            if (this.changes === 0) {
+
+                                sqlite.run("ROLLBACK");
+
+                                return resolve(null);
+                            }
+
+                            sqlite.run("COMMIT", (commitErr) => {
+
+                                if (commitErr) {
+                                    return reject(commitErr);
+                                }
+
+                                job.payload =
+                                    job.payload
+                                        ? JSON.parse(job.payload)
+                                        : {};
+
+                                resolve(job);
+                            });
+                        });
+                    });
+                }
+            );
+        });
+    });
+}
+
+
+// --------------------------------------------------
+
+async function completeJob(id) {
+
+    return db.execute(`
         UPDATE jobs
-        SET status = 'running',
-            attempts = attempts + 1,
-            updated_at = CURRENT_TIMESTAMP
+        SET status = 'completed',
+            updated_at = datetime('now')
         WHERE id = ?
-    `, [job.id]);
-
-    job.payload = JSON.parse(job.payload || "{}");
-
-    return job;
+    `, [id]);
 }
 
 // --------------------------------------------------
-// COMPLETE JOB
-// --------------------------------------------------
 
-async function completeJob(jobId) {
+async function failJob(id, error) {
 
-    await db.execute(`
-        UPDATE jobs
-        SET status = 'done',
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    `, [jobId]);
-}
-
-// --------------------------------------------------
-// FAIL JOB
-// --------------------------------------------------
-
-async function failJob(jobId, error = null) {
-
-    await db.execute(`
+    return db.execute(`
         UPDATE jobs
         SET status = 'failed',
-            updated_at = CURRENT_TIMESTAMP
+            updated_at = datetime('now')
         WHERE id = ?
-    `, [jobId]);
-
-    if (error) {
-        console.error(error);
-    }
+    `, [id]);
 }
 
-// --------------------------------------------------
-// EXPORTS
 // --------------------------------------------------
 
 module.exports = {
-    createJob,
     claimJob,
     completeJob,
     failJob

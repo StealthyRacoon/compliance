@@ -44,7 +44,7 @@ sqlite.serialize(() => {
             scan_run_id TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
+        )
     `);
 
 
@@ -54,7 +54,7 @@ sqlite.serialize(() => {
             display_name TEXT,
             web_url TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
+        )
     `);
 
 
@@ -67,7 +67,7 @@ sqlite.serialize(() => {
             delta_link TEXT,
             status TEXT DEFAULT 'pending',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
+        , updated_at TEXT, last_error TEXT)
     `);
 
 
@@ -79,7 +79,7 @@ sqlite.serialize(() => {
             started_at TEXT DEFAULT CURRENT_TIMESTAMP,
             completed_at TEXT,
             metadata TEXT
-        );
+        )
     `);
 
 
@@ -101,7 +101,7 @@ sqlite.serialize(() => {
 
             last_seen_run_id TEXT,
             last_scanned_at TEXT
-        );
+        , web_url TEXT)
     `);
 
 
@@ -126,7 +126,7 @@ sqlite.serialize(() => {
             metadata TEXT,
 
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
+        )
     `);
 
 
@@ -140,7 +140,7 @@ sqlite.serialize(() => {
             config TEXT,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
+        )
     `);
     /*
      
@@ -156,7 +156,7 @@ sqlite.serialize(() => {
                 './scripts/discoverSites.js',
                 1,
                 'v1',
-                'Initial site discovery from Microsoft Graph'`);
+                'Initial site discovery from Microsoft Graph');
     
         
             INSERT OR IGNORE INTO script_registry (
@@ -171,7 +171,7 @@ sqlite.serialize(() => {
                 './scripts/discoverDrives.js',
                 1,
                 'v1',
-                'Discovers document libraries (drives) for a site'`);
+                'Discovers document libraries (drives) for a site');
     
         
             INSERT OR IGNORE INTO script_registry (
@@ -186,8 +186,10 @@ sqlite.serialize(() => {
                 './scripts/scanDrive.js',
                 1,
                 'v1',
-                'Scans all files in a drive and writes compliance events'`);
-    */
+                'Scans all files in a drive and writes compliance events');
+
+
+*/
 
 
 });
@@ -197,11 +199,8 @@ sqlite.serialize(() => {
 // --------------------------------------------------
 
 function query(sql, params = []) {
-
     return new Promise((resolve, reject) => {
-
         sqlite.all(sql, params, (err, rows) => {
-
             if (err) reject(err);
             else resolve(rows);
         });
@@ -220,16 +219,23 @@ function get(sql, params = []) {
     });
 }
 
+let writeQueue = Promise.resolve();
+
 function execute(sql, params = []) {
 
-    return new Promise((resolve, reject) => {
+    writeQueue = writeQueue.then(() => {
+        return new Promise((resolve, reject) => {
 
-        sqlite.run(sql, params, function (err) {
+            sqlite.run(sql, params, function (err) {
 
-            if (err) reject(err);
-            else resolve(this);
+                if (err) reject(err);
+                else resolve(this);
+            });
+
         });
     });
+
+    return writeQueue;
 }
 
 // --------------------------------------------------
@@ -239,5 +245,6 @@ function execute(sql, params = []) {
 module.exports = {
     query,
     get,
-    execute
+    execute,
+    sqlite
 };

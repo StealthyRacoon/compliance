@@ -1,5 +1,11 @@
 const axios = require("axios");
 const { ConfidentialClientApplication } = require("@azure/msal-node");
+const dotenv = require("dotenv");
+dotenv.config();
+
+// --------------------------------------------------
+// MSAL
+// --------------------------------------------------
 
 const msalConfig = {
     auth: {
@@ -16,17 +22,14 @@ let cachedToken = null;
 let tokenExpires = 0;
 
 // --------------------------------------------------
-// GET ACCESS TOKEN
+// TOKEN
 // --------------------------------------------------
 
 async function getAccessToken() {
 
     const now = Date.now();
 
-    if (
-        cachedToken &&
-        tokenExpires > now + 60000
-    ) {
+    if (cachedToken && tokenExpires > now + 60000) {
         return cachedToken;
     }
 
@@ -36,32 +39,141 @@ async function getAccessToken() {
         });
 
     cachedToken = response.accessToken;
-
-    tokenExpires =
-        response.expiresOn.getTime();
+    tokenExpires = response.expiresOn.getTime();
 
     return cachedToken;
 }
 
 // --------------------------------------------------
-// GRAPH REQUEST
+// HELPERS
 // --------------------------------------------------
 
-async function graphGet(url) {
+const sleep = (ms) =>
+    new Promise(r => setTimeout(r, ms));
 
-    const token = await getAccessToken();
+// --------------------------------------------------
+// SAFE GRAPH REQUEST
+// --------------------------------------------------
 
-    const res = await axios.get(url, {
-        headers: {
-            Authorization: `Bearer ${token}`
+async function graphRequest(fn, retries = 8) {
+
+    for (let attempt = 0; attempt < retries; attempt++) {
+
+        try {
+
+            return await fn();
+
+        } catch (err) {
+
+            const status =
+                err?.response?.status;
+
+            // --------------------------------------------------
+            // THROTTLED
+            // --------------------------------------------------
+
+            if (status === 429 || status === 503) {
+
+                const retryAfter =
+                    parseInt(
+                        err?.response?.headers?.["retry-after"]
+                    );
+
+                // fallback exponential backoff
+                const delay =
+                    retryAfter
+                        ? retryAfter * 1000
+                        : Math.min(
+                            1000 * Math.pow(2, attempt),
+                            30000
+                        );
+
+                // jitter prevents retry storms
+                const jitter =
+                    Math.floor(Math.random() * 500);
+
+                const wait =
+                    delay + jitter;
+
+                console.log(
+                    `⏳ GRAPH THROTTLED (${status}) ` +
+                    `retry ${attempt + 1}/${retries} ` +
+                    `waiting ${wait}ms`
+                );
+
+                await sleep(wait);
+
+                continue;
+            }
+
+            // --------------------------------------------------
+            // TOKEN EXPIRED
+            // --------------------------------------------------
+
+            if (status === 401) {
+
+                console.log("🔑 Resetting token cache");
+
+                cachedToken = null;
+                tokenExpires = 0;
+
+                continue;
+            }
+
+            throw err;
         }
-    });
+    }
 
-    return res.data;
+    throw new Error("Graph request max retries exceeded");
 }
 
 // --------------------------------------------------
-// PAGED REQUEST
+// RAW GET
+// --------------------------------------------------
+
+async function graphGetRaw(url) {
+
+    return graphRequest(async () => {
+
+        const token = await getAccessToken();
+
+        const res = await axios.get(url, {
+            headers: {
+                Authorization: `Bearer ${token}`
+            }
+        });
+
+        return res.data;
+    });
+}
+
+// --------------------------------------------------
+// POST
+// --------------------------------------------------
+
+async function graphPost(url, body = {}) {
+
+    return graphRequest(async () => {
+
+        const token = await getAccessToken();
+
+        const res = await axios.post(
+            url,
+            body,
+            {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                }
+            }
+        );
+
+        return res.data;
+    });
+}
+
+// --------------------------------------------------
+// PAGINATION
 // --------------------------------------------------
 
 async function graphGetAllPages(url) {
@@ -71,7 +183,7 @@ async function graphGetAllPages(url) {
 
     while (next) {
 
-        const data = await graphGet(next);
+        const data = await graphGetRaw(next);
 
         results.push(...(data.value || []));
 
@@ -81,22 +193,10 @@ async function graphGetAllPages(url) {
     return results;
 }
 
-async function graphPost(url, body) {
-
-    const token = await getAccessToken();
-
-    const res = await axios.post(url, body, {
-        headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json"
-        }
-    });
-
-    return res.data;
-}
+// --------------------------------------------------
 
 module.exports = {
-    graphGet,
-    graphGetAllPages,
-    graphPost
+    graphGetRaw,
+    graphPost,
+    graphGetAllPages
 };
