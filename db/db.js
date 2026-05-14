@@ -92,6 +92,7 @@ sqlite.serialize(() => {
             mime_type TEXT,
             size INTEGER,
             last_modified TEXT,
+            status TEXT,
 
             raw_data TEXT,
 
@@ -237,6 +238,23 @@ sqlite.serialize(() => {
                 1,
                 'v1',
                 'Scans all files in a drive and writes compliance events'
+            );
+    `);
+
+    sqlite.run(`
+      INSERT OR IGNORE INTO script_registry (
+                job_type,
+                script_path,
+                enabled,
+                version,
+                description
+            )
+            VALUES (
+                'enrich_drive',
+                './scripts/enrichDrive.js',
+                1,
+                'v1',
+                'Gets all the metadata fields from SharePoint for all files created/modified after 01/01/2026'
             );
     `);
 

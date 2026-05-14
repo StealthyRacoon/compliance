@@ -1,62 +1,31 @@
 const express = require("express");
-const { createJob } = require("./core/jobs");
 const dotenv = require("dotenv");
-dotenv.config();
+const http = require("http");
+
+const { createJob } = require("./core/jobs");
+const scanRoutes = require("./controllers/scan");
+const workerRoutes = require("./controllers/workers").router;
+const { workers } = require("./controllers/workers");
+
+const { createWorkerWS } = require("./ws/workers");
 
 
 const app = express();
+const server = http.createServer(app);
+
+
+dotenv.config();
 
 app.use(express.json());
 
-// --------------------------------------------------
-// TEST ENDPOINT
-// --------------------------------------------------
+const ws = createWorkerWS(server, { workers });
 
-app.post("/jobs/test", async (req, res) => {
+app.set("ws", ws.broadcast);
 
-    try {
 
-        const jobId = await createJob(
-            "test",
-            req.body
-        );
 
-        res.json({
-            success: true,
-            jobId
-        });
-
-    } catch (err) {
-
-        console.error(err);
-
-        res.status(500).json({
-            success: false,
-            error: err.message
-        });
-    }
-});
-
-app.post("/discover/start", async (req, res) => {
-
-    try {
-
-        const jobId =
-            await createJob("discover_sites");
-
-        res.json({
-            success: true,
-            jobId
-        });
-
-    } catch (err) {
-
-        res.status(500).json({
-            success: false,
-            error: err.message
-        });
-    }
-});
+app.use('/scan', scanRoutes)
+app.use('/workers', workerRoutes)
 
 
 app.use((err, req, res, next) => {
@@ -74,6 +43,6 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
     console.log(`API running on port ${PORT}`);
 });
