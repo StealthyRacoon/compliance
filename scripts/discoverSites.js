@@ -44,13 +44,16 @@ module.exports = async function run(job, { db }) {
 
         // UPSERT SITE (current state only)
         await db.execute(`
-            INSERT OR REPLACE INTO sites (
-                site_id,
-                display_name,
-                web_url
-            )
-            VALUES (?, ?, ?)
-        `, [
+    INSERT INTO sites (
+        site_id,
+        display_name,
+        web_url
+    )
+    VALUES (?, ?, ?)
+    ON CONFLICT(site_id) DO UPDATE SET
+        display_name = excluded.display_name,
+        web_url = excluded.web_url
+`, [
             site.id,
             site.displayName || null,
             site.webUrl || null

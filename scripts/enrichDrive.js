@@ -1,6 +1,11 @@
 const { graphGetRaw } = require("../utils/graph");
 
-const cutoff = new Date("2026-01-01T00:00:00Z");
+const REQUIRED_FIELDS = [
+    "Department",
+    "DocumentType"
+];
+
+const CUTOFF_DATE = new Date("2026-01-01T00:00:00Z");
 
 module.exports = async function run(job, { db }) {
 
@@ -13,117 +18,315 @@ module.exports = async function run(job, { db }) {
         };
     }
 
-    console.log("🚀 enrichDrive START:", drive_id);
+    console.log("🚀 ENRICH DRIVE START:", drive_id);
 
-    let nextUrl =
-        `https://graph.microsoft.com/v1.0/drives/${drive_id}/root/delta?$top=999`;
+    // --------------------------------------------------
+    // GET FILES NEEDING ENRICHMENT
+    // --------------------------------------------------
 
-    let processed = 0;
+    const files = await db.query(`
+        SELECT *
+        FROM files
+        WHERE drive_id = ?
+          AND needs_enrichment = 1
+    `, [drive_id]);
+
+    console.log(`🔍 Files queued for enrichment: ${files.length}`);
+
     let enriched = 0;
+    let compliant = 0;
+    let nonCompliant = 0;
     let skipped = 0;
 
-    try {
+    // --------------------------------------------------
+    // PROCESS FILES
+    // --------------------------------------------------
 
-        while (nextUrl) {
+    for (const file of files) {
 
-            const data = await graphGetRaw(nextUrl);
+        try {
 
-            const items = data.value || [];
+            // ------------------------------------------
+            // IGNORE OLD FILES
+            // ------------------------------------------
 
-            for (const item of items) {
+            if (file.last_modified) {
 
-                if (!item.file) continue;
+                const modified =
+                    new Date(file.last_modified);
 
-                const modified = item.lastModifiedDateTime
-                    ? new Date(item.lastModifiedDateTime)
-                    : null;
-
-                const file_id = `${site_id}:${drive_id}:${item.id}`;
-
-                // --------------------------------------------------
-                // IGNORE OLD FILES
-                // --------------------------------------------------
-                if (modified && modified < cutoff) {
+                if (modified < CUTOFF_DATE) {
 
                     skipped++;
 
                     await db.execute(`
-                        UPDATE files
-                        SET needs_enrichment = 0
-                        WHERE file_id = ?
-                    `, [file_id]);
+                        INSERT INTO scan_events (
+                            id,
+                            site_id,
+                            drive_id,
+                            file_id,
+                            event_type,
+                            old_status,
+                            new_status,
+                            file_name,
+                            metadata
+                        )
+                        VALUES (
+                            lower(hex(randomblob(16))),
+                            ?, ?, ?,
+                            'metadata_skipped',
+                            ?,
+                            ?,
+                            ?,
+                            ?
+                        )
+                    `, [
+                        site_id,
+                        drive_id,
+                        file.file_id,
+                        file.status,
+                        file.status,
+                        file.name,
+                        JSON.stringify({
+                            reason: "before_cutoff",
+                            cutoff: CUTOFF_DATE.toISOString()
+                        })
+                    ]);
 
                     continue;
                 }
+            }
 
-                try {
+            // ------------------------------------------
+            // EXTRACT ITEM ID
+            // ------------------------------------------
 
-                    const url =
-                        `https://graph.microsoft.com/v1.0/drives/${drive_id}/items/${item.id}/listItem/fields`;
+            const [, , itemId] =
+                file.file_id.split(":");
 
-                    const fields = await graphGetRaw(url);
+            // ------------------------------------------
+            // FETCH SHAREPOINT FIELDS
+            // ------------------------------------------
 
-                    const metadata = fields
-                        ? {
-                            department: fields.Department || null,
-                            documentType: fields.DocumentType || null,
-                            coupe: fields.Coupe || null,
-                            keywords: fields.TaxKeyword || null
-                        }
-                        : null;
+            const fieldsUrl =
+                `https://graph.microsoft.com/v1.0/drives/${drive_id}/items/${itemId}/listItem/fields`;
 
-                    await db.execute(`
-                        UPDATE files
-                        SET metadata = ?,
-                            needs_enrichment = 0
-                        WHERE file_id = ?
-                    `, [
-                        JSON.stringify(metadata),
-                        file_id
-                    ]);
+            let fields = null;
 
-                    enriched++;
+            try {
+                fields = await graphGetRaw(fieldsUrl);
+            } catch (err) {
 
-                } catch (err) {
-
-                    console.error(
-                        "❌ enrichment failed:",
+                await db.execute(`
+                    INSERT INTO scan_events (
+                        id,
+                        site_id,
+                        drive_id,
                         file_id,
-                        err.message
-                    );
+                        event_type,
+                        old_status,
+                        new_status,
+                        file_name,
+                        metadata
+                    )
+                    VALUES (
+                        lower(hex(randomblob(16))),
+                        ?, ?, ?,
+                        'metadata_fetch_failed',
+                        ?,
+                        ?,
+                        ?,
+                        ?
+                    )
+                `, [
+                    site_id,
+                    drive_id,
+                    file.file_id,
+                    file.status,
+                    file.status,
+                    file.name,
+                    JSON.stringify({
+                        error: err.message
+                    })
+                ]);
+
+                continue;
+            }
+
+            // ------------------------------------------
+            // BUILD METADATA SNAPSHOT
+            // ------------------------------------------
+
+            const metadata = {
+                department: fields?.Department || null,
+                documentType: fields?.DocumentType || null,
+                coupe: fields?.Coupe || null,
+                keywords: fields?.TaxKeyword || null
+            };
+
+            // ------------------------------------------
+            // COMPLIANCE CHECK
+            // ------------------------------------------
+
+            const missingFields = [];
+
+            for (const field of REQUIRED_FIELDS) {
+
+                const value = fields?.[field];
+
+                if (
+                    value === null ||
+                    value === undefined ||
+                    value === ""
+                ) {
+                    missingFields.push(field);
                 }
-
-                processed++;
             }
 
-            nextUrl = data["@odata.nextLink"] || null;
-        }
+            const isCompliant =
+                missingFields.length === 0;
 
-        console.log("✅ enrichDrive DONE:", {
-            drive_id,
-            processed,
-            enriched,
-            skipped
-        });
+            const oldStatus =
+                file.status || "unknown";
 
-        return {
-            success: true,
-            data: {
+            const newStatus =
+                isCompliant
+                    ? "compliant"
+                    : "non_compliant";
+
+            // ------------------------------------------
+            // UPDATE FILE SNAPSHOT
+            // ------------------------------------------
+
+            await db.execute(`
+                UPDATE files
+                SET metadata = ?,
+                    status = ?,
+                    needs_enrichment = 0,
+                    last_scanned_at = datetime('now')
+                WHERE file_id = ?
+            `, [
+                JSON.stringify({
+                    fields,
+                    extracted: metadata
+                }),
+                newStatus,
+                file.file_id
+            ]);
+
+            // ------------------------------------------
+            // WRITE AUDIT EVENT
+            // ------------------------------------------
+
+            await db.execute(`
+                INSERT INTO scan_events (
+                    id,
+                    site_id,
+                    drive_id,
+                    file_id,
+                    event_type,
+                    old_status,
+                    new_status,
+                    file_name,
+                    metadata
+                )
+                VALUES (
+                    lower(hex(randomblob(16))),
+                    ?, ?, ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?
+                )
+            `, [
+                site_id,
                 drive_id,
-                processed,
-                enriched,
-                skipped
+                file.file_id,
+
+                isCompliant
+                    ? "metadata_compliant"
+                    : "metadata_non_compliant",
+
+                oldStatus,
+                newStatus,
+                file.name,
+
+                JSON.stringify({
+                    missingFields,
+                    metadata,
+                    checkedAt: new Date().toISOString()
+                })
+            ]);
+
+            enriched++;
+
+            if (isCompliant) {
+                compliant++;
+            } else {
+                nonCompliant++;
             }
-        };
 
-    } catch (err) {
+        } catch (err) {
 
-        console.error("❌ enrichDrive FAILED:", err.message);
+            console.error(
+                "❌ ENRICH FAILED:",
+                file.file_id,
+                err.message
+            );
 
-        return {
-            success: false,
-            error: err.message,
-            drive_id
-        };
+            await db.execute(`
+                INSERT INTO scan_events (
+                    id,
+                    site_id,
+                    drive_id,
+                    file_id,
+                    event_type,
+                    old_status,
+                    new_status,
+                    file_name,
+                    metadata
+                )
+                VALUES (
+                    lower(hex(randomblob(16))),
+                    ?, ?, ?,
+                    'metadata_processing_failed',
+                    ?,
+                    ?,
+                    ?,
+                    ?
+                )
+            `, [
+                site_id,
+                drive_id,
+                file.file_id,
+                file.status,
+                file.status,
+                file.name,
+                JSON.stringify({
+                    error: err.message
+                })
+            ]);
+        }
     }
+
+    console.log(`
+        ✅ ENRICHMENT COMPLETE
+        Drive: ${drive_id}
+        Enriched: ${enriched}
+        Compliant: ${compliant}
+        Non-compliant: ${nonCompliant}
+        Skipped: ${skipped}
+    `);
+
+    return {
+        success: true,
+        data: {
+            drive_id,
+            enriched,
+            compliant,
+            nonCompliant,
+            skipped
+        }
+    };
 };

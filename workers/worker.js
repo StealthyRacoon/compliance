@@ -1,6 +1,7 @@
 const db = require("../db/db");
 const path = require("path");
 const { claimJob, completeJob, failJob } = require("../core/jobs");
+const { finalizeScanRun } = require("../core/scanRuns");
 
 // --------------------------------------------------
 // WORKER LOOP (NO CONCURRENCY, NO GRAPH LOGIC)
@@ -52,6 +53,16 @@ async function run() {
 
             await completeJob(job.id);
 
+            if (job.scan_run_id) {
+                await finalizeScanRun(job.scan_run_id);
+            }
+
+            await db.execute(`
+                UPDATE scan_runs
+                SET completed_jobs = COALESCE(completed_jobs, 0) + 1
+                WHERE id = ?
+            `, [job.scan_run_id]);
+
             console.log(`✅ Job completed: ${job.id}`);
 
         } catch (err) {
@@ -60,6 +71,28 @@ async function run() {
 
             if (job?.id) {
                 await failJob(job.id, err.message);
+            }
+
+            if (job?.scan_run_id) {
+
+                await db.execute(`
+                    UPDATE scan_runs
+                    SET metadata = json_set(
+                        COALESCE(metadata, '{}'),
+                        '$.failed_jobs',
+                        COALESCE(json_extract(metadata, '$.failed_jobs'), 0) + 1
+                    )
+                    WHERE id = ?
+                `, [job.scan_run_id]);
+
+                eventBus.emit("worker_event", {
+                    type: "job_failed",
+                    jobId: job?.id,
+                    jobType: job?.type,
+                    error: err.message,
+                    workerId: process.pid,
+                    scanRunId: job?.scan_run_id
+                });
             }
         }
     }

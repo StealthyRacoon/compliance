@@ -54,6 +54,23 @@ module.exports = async function run(job, { db, payload }) {
     const drive_id = payload.drive_id;
 
     const scanRunId = job.scan_run_id || uuid();
+    const createdNewRun = !job.scan_run_id;
+
+    if (createdNewRun) {
+
+        await db.execute(`
+        INSERT INTO scan_runs (
+                id,
+                type,
+                status
+            )
+            VALUES (
+                ?,
+                'scan_drive',
+                'running'
+            )
+        `, [scanRunId]);
+    }
 
     if (!site_id || !drive_id) {
         return {
@@ -126,12 +143,28 @@ module.exports = async function run(job, { db, payload }) {
 
             await runPool(files, async (item) => {
 
-                const file_id =
-                    `${site_id}:${drive_id}:${item.id}`;
+                const file_id = `${site_id}:${drive_id}:${item.id}`;
 
-                const rawData = {
-                    ...item
-                };
+                const rawData = { ...item };
+
+                // --------------------------------------------------
+                // CHECK EXISTING FILE (for event classification)
+                // --------------------------------------------------
+
+                const existing = await db.get(`
+                    SELECT file_id
+                    FROM files
+                    WHERE file_id = ?
+                    LIMIT 1
+                `, [file_id]);
+
+                const eventType = existing
+                    ? "file_updated"
+                    : "file_discovered";
+
+                // --------------------------------------------------
+                // UPSERT FILE STATE
+                // --------------------------------------------------
 
                 await db.execute(`
                     INSERT INTO files (
@@ -152,7 +185,6 @@ module.exports = async function run(job, { db, payload }) {
                         ?, ?, ?, ?, ?, ?, ?, NULL, 1,
                         'scanned', ?, datetime('now')
                     )
-
                     ON CONFLICT(file_id) DO UPDATE SET
                         name = excluded.name,
                         web_url = excluded.web_url,
@@ -170,6 +202,55 @@ module.exports = async function run(job, { db, payload }) {
                     item.lastModifiedDateTime || null,
                     JSON.stringify(rawData),
                     scanRunId
+                ]);
+
+                // --------------------------------------------------
+                // SCAN EVENT (FULL HISTORY)
+                // --------------------------------------------------
+
+                await db.execute(`
+                    INSERT INTO scan_events (
+                        id,
+                        scan_run_id,
+                        site_id,
+                        drive_id,
+                        file_id,
+                        event_type,
+                        file_name,
+                        file_path,
+                        mime_type,
+                        size,
+                        metadata,
+                        created_at
+                    )
+                    VALUES (
+                        lower(hex(randomblob(16))),
+                        ?, ?, ?, ?,
+                        ?,
+                        ?,
+                        ?,
+                        ?,
+                        ?,
+                        ?,
+                        datetime('now')
+                    )
+                `, [
+                    scanRunId,
+                    site_id,
+                    drive_id,
+                    file_id,
+
+                    eventType,
+
+                    item.name || null,
+                    item.parentReference?.path || null,
+                    item.file?.mimeType || null,
+                    item.size || null,
+
+                    JSON.stringify({
+                        webUrl: item.webUrl || null,
+                        lastModified: item.lastModifiedDateTime || null
+                    })
                 ]);
 
                 processed++;
@@ -201,6 +282,78 @@ module.exports = async function run(job, { db, payload }) {
 
         console.log("\n✅ DELTA SCAN DONE");
         console.log("📦 Files processed:", processed);
+
+        if (createdNewRun) {
+
+            await db.execute(`
+        UPDATE scan_runs
+        SET status = 'completed',
+            completed_at = datetime('now')
+        WHERE id = ?
+    `, [scanRunId]);
+        }
+
+
+        // --------------------------------------------------
+        // CREATE ENRICHMENT JOB
+        // --------------------------------------------------
+
+        if (processed > 0) {
+
+            const existingEnrichJob = await db.get(`
+                SELECT id
+                FROM jobs
+                WHERE type = 'enrich_drive'
+                AND status IN ('pending', 'running')
+                AND json_extract(payload, '$.drive_id') = ?
+                LIMIT 1
+            `, [drive_id]);
+
+            if (!existingEnrichJob) {
+
+                const enrichJobId = uuid();
+
+                await db.execute(`
+                    INSERT INTO jobs (
+                        id,
+                        type,
+                        status,
+                        payload,
+                        scan_run_id,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (
+                        ?,
+                        'enrich_drive',
+                        'pending',
+                        ?,
+                        ?,
+                        datetime('now'),
+                        datetime('now')
+                    )
+                `, [
+                    enrichJobId,
+                    JSON.stringify({
+                        site_id,
+                        drive_id
+                    }),
+                    scanRunId
+                ]);
+
+                console.log(
+                    "📦 Enrichment job queued:",
+                    enrichJobId
+                );
+
+            } else {
+
+                console.log(
+                    "⏭ Enrichment job already exists for drive:",
+                    drive_id
+                );
+            }
+        }
 
         return {
             success: true,

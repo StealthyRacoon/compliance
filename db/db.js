@@ -42,6 +42,8 @@ sqlite.serialize(() => {
             payload TEXT,
             attempts INTEGER DEFAULT 0,
             scan_run_id TEXT,
+            last_error TEXT,
+            failed_at TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
@@ -113,6 +115,8 @@ sqlite.serialize(() => {
             id TEXT PRIMARY KEY,
             type TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'running',
+            total_jobs INTEGER DEFAULT 0,
+            completed_jobs INTEGER DEFAULT 0,
 
             started_at TEXT DEFAULT CURRENT_TIMESTAMP,
             completed_at TEXT
