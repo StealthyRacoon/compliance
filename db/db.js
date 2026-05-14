@@ -55,6 +55,7 @@ sqlite.serialize(() => {
             site_id TEXT PRIMARY KEY,
             display_name TEXT,
             web_url TEXT,
+            active INTEGER DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
     `);

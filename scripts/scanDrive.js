@@ -220,7 +220,6 @@ module.exports = async function run(job, { db, payload }) {
                         file_path,
                         mime_type,
                         size,
-                        metadata,
                         created_at
                     )
                     VALUES (
@@ -231,7 +230,7 @@ module.exports = async function run(job, { db, payload }) {
                         ?,
                         ?,
                         ?,
-                        ?,
+                        
                         datetime('now')
                     )
                 `, [
@@ -245,7 +244,6 @@ module.exports = async function run(job, { db, payload }) {
                     item.name || null,
                     item.parentReference?.path || null,
                     item.file?.mimeType || null,
-                    item.size || null,
 
                     JSON.stringify({
                         webUrl: item.webUrl || null,
