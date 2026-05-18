@@ -307,50 +307,50 @@ module.exports = async function run(job, { db, payload }) {
                 LIMIT 1
             `, [drive_id]);
 
-            if (!existingEnrichJob) {
+            // if (!existingEnrichJob) {
 
-                const enrichJobId = uuid();
+            //     const enrichJobId = uuid();
 
-                await db.execute(`
-                    INSERT INTO jobs (
-                        id,
-                        type,
-                        status,
-                        payload,
-                        scan_run_id,
-                        created_at,
-                        updated_at
-                    )
-                    VALUES (
-                        ?,
-                        'enrich_drive',
-                        'pending',
-                        ?,
-                        ?,
-                        datetime('now'),
-                        datetime('now')
-                    )
-                `, [
-                    enrichJobId,
-                    JSON.stringify({
-                        site_id,
-                        drive_id
-                    }),
-                    scanRunId
-                ]);
+            //     await db.execute(`
+            //         INSERT INTO jobs (
+            //             id,
+            //             type,
+            //             status,
+            //             payload,
+            //             scan_run_id,
+            //             created_at,
+            //             updated_at
+            //         )
+            //         VALUES (
+            //             ?,
+            //             'enrich_drive',
+            //             'pending',
+            //             ?,
+            //             ?,
+            //             datetime('now'),
+            //             datetime('now')
+            //         )
+            //     `, [
+            //         enrichJobId,
+            //         JSON.stringify({
+            //             site_id,
+            //             drive_id
+            //         }),
+            //         scanRunId
+            //     ]);
 
-                console.log(
-                    "📦 Enrichment job queued:",
-                    enrichJobId
-                );
+            //     console.log(
+            //         "📦 Enrichment job queued:",
+            //         enrichJobId
+            //     );
 
-            } else {
+            // } else {
 
-                console.log(
-                    "⏭ Enrichment job already exists for drive:",
-                    drive_id
-                );
-            }
+            //     console.log(
+            //         "⏭ Enrichment job already exists for drive:",
+            //         drive_id
+            //     );
+            // }
         }
 
         return {

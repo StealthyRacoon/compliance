@@ -45,11 +45,70 @@ async function getAccessToken() {
 }
 
 // --------------------------------------------------
+// WEBHOOK TOKEN
+// --------------------------------------------------
+
+async function getWebhookAccessToken() {
+
+    const response = await axios.post(
+        `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID}/oauth2/v2.0/token`,
+        new URLSearchParams({
+            client_id: process.env.AZURE_CLIENT_ID,
+            client_secret: process.env.AZURE_CLIENT_SECRET,
+            scope: "https://graph.microsoft.com/.default",
+            grant_type: "client_credentials"
+        }),
+        {
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+        }
+    );
+
+    return response.data.access_token;
+}
+
+
+
+// --------------------------------------------------
 // HELPERS
 // --------------------------------------------------
 
 const sleep = (ms) =>
     new Promise(r => setTimeout(r, ms));
+
+async function createDriveSubscription(driveId) {
+
+    const token = await getAccessToken();
+
+    // 1 hour from now
+    const expiration = new Date(
+        Date.now() + 60 * 60 * 1000
+    ).toISOString();
+
+    console.log({
+        notificationUrl:
+            `${process.env.PUBLIC_WEBHOOK_URL}/webhooks/sharepoint`
+    });
+
+    const response = await axios.post(
+        "https://graph.microsoft.com/v1.0/subscriptions",
+        {
+            changeType: "updated",
+            notificationUrl: `${process.env.PUBLIC_WEBHOOK_URL}/webhooks/sharepoint`,
+            resource: `/drives/${driveId}/root`,
+            expirationDateTime: expiration,
+            clientState: `${process.env.CLIENT_SECRET}`
+        },
+        {
+            headers: {
+                Authorization: `Bearer ${token}`
+            }
+        }
+    );
+
+    return response.data;
+}
 
 // --------------------------------------------------
 // SAFE GRAPH REQUEST
@@ -198,5 +257,7 @@ async function graphGetAllPages(url) {
 module.exports = {
     graphGetRaw,
     graphPost,
-    graphGetAllPages
+    graphGetAllPages,
+    getWebhookAccessToken,
+    createDriveSubscription
 };

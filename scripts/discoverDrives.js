@@ -24,7 +24,7 @@ module.exports = async function run(job, { db, payload }) {
 
         console.log("📀 DRIVES FOUND:", drives?.length || 0);
 
-        let processed = 0;
+        // let processed = 0;
 
         for (const drive of drives || []) {
 
@@ -73,26 +73,26 @@ module.exports = async function run(job, { db, payload }) {
                 // CREATE SCAN JOB
                 // --------------------------------------------------
 
-                await db.execute(`
-                    INSERT INTO jobs (
-                        id,
-                        type,
-                        status,
-                        payload,
-                        scan_run_id
-                    )
-                    VALUES (?, 'scan_drive', 'pending', ?, ?)
-                `, [
-                    uuid(),
-                    JSON.stringify({
-                        site_id,
-                        drive_id: drive.id,
-                        delta_link: null
-                    }),
-                    scanRunId
-                ]);
+                // await db.execute(`
+                //     INSERT INTO jobs (
+                //         id,
+                //         type,
+                //         status,
+                //         payload,
+                //         scan_run_id
+                //     )
+                //     VALUES (?, 'scan_drive', 'pending', ?, ?)
+                // `, [
+                //     uuid(),
+                //     JSON.stringify({
+                //         site_id,
+                //         drive_id: drive.id,
+                //         delta_link: null
+                //     }),
+                //     scanRunId
+                // ]);
 
-                processed++;
+                // processed++;
 
             } catch (err) {
 
@@ -106,7 +106,7 @@ module.exports = async function run(job, { db, payload }) {
                 site_id,
                 scanRunId,
                 drivesFound: drives?.length || 0,
-                drivesProcessed: processed
+                // drivesProcessed: processed
             }
         };
 

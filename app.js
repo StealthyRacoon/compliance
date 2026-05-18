@@ -6,6 +6,7 @@ const { createJob } = require("./core/jobs");
 const scanRoutes = require("./controllers/scan");
 const workerRoutes = require("./controllers/workers").router;
 const { workers } = require("./controllers/workers");
+const webhooksRoutes = require("./controllers/webhooks");
 
 const { createWorkerWS } = require("./ws/workers");
 
@@ -26,6 +27,7 @@ app.set("ws", ws.broadcast);
 
 app.use('/scan', scanRoutes)
 app.use('/workers', workerRoutes)
+app.use('/webhooks', webhooksRoutes)
 
 
 app.use((err, req, res, next) => {

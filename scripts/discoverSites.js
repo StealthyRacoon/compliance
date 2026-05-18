@@ -34,7 +34,7 @@ module.exports = async function run(job, { db }) {
         s => !s.webUrl?.includes("/personal/")
     );
 
-    let jobsCreated = 0;
+    // let jobsCreated = 0;
 
     // --------------------------------------------------
     // PROCESS SITES
@@ -71,25 +71,25 @@ module.exports = async function run(job, { db }) {
 
         if (existingJob) continue;
 
-        // CREATE DISCOVER_DRIVES JOB (linked to scan run)
-        await db.execute(`
-            INSERT INTO jobs (
-                id,
-                type,
-                status,
-                payload,
-                scan_run_id
-            )
-            VALUES (?, 'discover_drives', 'pending', ?, ?)
-        `, [
-            uuid(),
-            JSON.stringify({
-                site_id: site.id
-            }),
-            runId
-        ]);
+        // // CREATE DISCOVER_DRIVES JOB (linked to scan run)
+        // await db.execute(`
+        //     INSERT INTO jobs (
+        //         id,
+        //         type,
+        //         status,
+        //         payload,
+        //         scan_run_id
+        //     )
+        //     VALUES (?, 'discover_drives', 'pending', ?, ?)
+        // `, [
+        //     uuid(),
+        //     JSON.stringify({
+        //         site_id: site.id
+        //     }),
+        //     runId
+        // ]);
 
-        jobsCreated++;
+        // jobsCreated++;
     }
 
     // --------------------------------------------------
@@ -101,7 +101,7 @@ module.exports = async function run(job, { db }) {
         data: {
             scanRunId: runId,
             sitesProcessed: filtered.length,
-            discoverDriveJobsCreated: jobsCreated
+            // discoverDriveJobsCreated: jobsCreated
         }
     };
 };
