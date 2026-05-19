@@ -58,18 +58,4 @@ router.post("/subscribe/:driveId", async (req, res) => {
 });
 
 
-router.post("/sharepoint", async (req, res) => {
-
-    console.log("\n🔥 SHAREPOINT WEBHOOK RECEIVED");
-
-    console.log("Headers:");
-    console.log(JSON.stringify(req.headers, null, 2));
-
-    console.log("\nBody:");
-    console.log(JSON.stringify(req.body, null, 2));
-
-    res.sendStatus(200);
-});
-
-
 module.exports = router;
