@@ -1,101 +1,145 @@
 const db = require("../db/db");
 const path = require("path");
-const { claimJob, completeJob, failJob } = require("../core/jobs");
-const { finalizeScanRun } = require("../core/scanRuns");
+const eventBus = require("../core/eventBus");
+
+const {
+    claimTask,
+    completeTask,
+    failTask
+} = require("../core/tasks");
 
 // --------------------------------------------------
-// WORKER LOOP (NO CONCURRENCY, NO GRAPH LOGIC)
+// WORKER LOOP (TASK-LEVEL EXECUTION)
 // --------------------------------------------------
 
 async function run() {
 
-    console.log("🚀 Worker started");
+    console.log("[WORKER] 🚀 Task worker started");
 
     while (true) {
 
-        let job = null;
+        let task = null;
 
         try {
-            job = await claimJob();
 
-            if (!job) {
-                await new Promise(r => setTimeout(r, 500));
+            // -----------------------------------------
+            // CLAIM TASK
+            // -----------------------------------------
+            task = await claimTask();
+
+            if (!task) {
+                await sleep(500);
                 continue;
             }
 
-            console.log(`📦 Job claimed: ${job.id} (${job.type})`);
 
-            const registry = await db.get(`
+            console.log(`[WORKER] 📦 Task claimed: ${task.id} (${task.task_type})`);
+
+            // -----------------------------------------
+            // RESOLVE SCRIPT FROM TASK TYPE
+            // -----------------------------------------
+            const registry = await db.query(`
                 SELECT script_path
                 FROM script_registry
                 WHERE job_type = ?
                   AND enabled = 1
-            `, [job.type]);
+            `, [task.task_type]);
+
 
             if (!registry) {
-                throw new Error(`No script registered for ${job.type}`);
+                throw new Error(`No script registered for task type ${task.task_type}`);
             }
 
-            const scriptPath = path.resolve(registry.script_path);
+            const scriptPath = path.resolve(registry[0].script_path);
 
-            console.log("▶ Running script:", scriptPath);
+            console.log("[WORKER] ▶ Running script:", scriptPath);
 
             const runScript = require(scriptPath);
 
-            const result = await runScript(job, {
+            // -----------------------------------------
+            // EXECUTE TASK
+            // -----------------------------------------
+            const result = await runScript(task, {
                 db,
-                payload: job.payload
+                payload: safeParse(task.payload)
             });
 
             if (!result || result.success === false) {
-                throw new Error(result?.error || "Job failed");
+                throw new Error(result?.error || "Task failed");
             }
 
-            await completeJob(job.id);
+            // -----------------------------------------
+            // COMPLETE TASK
+            // -----------------------------------------
+            await completeTask(task.id);
 
-            if (job.scan_run_id) {
-                await finalizeScanRun(job.scan_run_id);
+            console.log(`[WORKER] ✅ Task completed: ${task.id}`);
+
+            const subtasks = await db.query(`
+                SELECT *
+                FROM subtasks
+                WHERE parent_task_type = ?
+                AND enabled = 1
+                ORDER BY task_order ASC
+            `, [task.task_type]);
+
+            console.log("Trying subtask: ", subtasks)
+
+            for (const subtask of subtasks) {
+
+                const runSubtask = require(
+                    path.resolve(subtask.script_path)
+                );
+
+                await runSubtask(result, {
+                    db,
+                    task
+                });
             }
-
-            await db.execute(`
-                UPDATE scan_runs
-                SET completed_jobs = COALESCE(completed_jobs, 0) + 1
-                WHERE id = ?
-            `, [job.scan_run_id]);
-
-            console.log(`✅ Job completed: ${job.id}`);
 
         } catch (err) {
 
-            console.error("❌ Job error:", err.message);
+            console.error("[WORKER] ❌ Task error:", err.message);
 
-            if (job?.id) {
-                await failJob(job.id, err.message);
+            if (task?.id) {
+                await failTask(task.id, err.message);
             }
 
-            if (job?.scan_run_id) {
-
-                await db.execute(`
-                    UPDATE scan_runs
-                    SET metadata = json_set(
-                        COALESCE(metadata, '{}'),
-                        '$.failed_jobs',
-                        COALESCE(json_extract(metadata, '$.failed_jobs'), 0) + 1
-                    )
-                    WHERE id = ?
-                `, [job.scan_run_id]);
-
-                eventBus.emit("worker_event", {
-                    type: "job_failed",
-                    jobId: job?.id,
-                    jobType: job?.type,
-                    error: err.message,
-                    workerId: process.pid,
-                    scanRunId: job?.scan_run_id
-                });
-            }
+            eventBus.emit("worker_event", {
+                type: "task_failed",
+                taskId: task?.id,
+                taskType: task?.type,
+                error: err.message,
+                workerId: process.pid,
+                jobId: task?.job_id
+            });
         }
     }
 }
+
+// --------------------------------------------------
+// HELPERS
+// --------------------------------------------------
+
+function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+}
+
+function safeParse(payload) {
+    try {
+        if (!payload) return null;
+        return typeof payload === "string"
+            ? JSON.parse(payload)
+            : payload;
+    } catch {
+        return payload;
+    }
+}
+
+// --------------------------------------------------
+// START WORKER
+// --------------------------------------------------
+
+
 
 run();

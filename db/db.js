@@ -35,23 +35,111 @@ sqlite.serialize(() => {
 sqlite.serialize(() => {
 
     sqlite.run(`
-        CREATE TABLE IF NOT EXISTS jobs (
+        CREATE TABLE IF NOT EXISTS job_definitions (
             id TEXT PRIMARY KEY,
-            type TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            payload TEXT,
-            attempts INTEGER DEFAULT 0,
-            scan_run_id TEXT,
-            last_error TEXT,
-            failed_at TEXT,
+
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+
+            enabled INTEGER DEFAULT 1,
+
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
+        );
+    `);
+
+    sqlite.run(`
+        CREATE TABLE IF NOT EXISTS job_definition_tasks (
+            id TEXT PRIMARY KEY,
+
+            job_definition_id TEXT NOT NULL,
+
+            task_type TEXT NOT NULL,
+            task_order INTEGER NOT NULL,
+
+            depends_on_task_id TEXT,
+
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+            FOREIGN KEY (job_definition_id)
+                REFERENCES job_definitions(id)
+                ON DELETE CASCADE
+        );
+    `);
+
+    sqlite.run(`
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+
+            job_definition_id TEXT NOT NULL,
+
+            job_type TEXT NOT NULL,
+
+            status TEXT NOT NULL DEFAULT 'pending',
+
+            payload TEXT,
+
+            attempts INTEGER DEFAULT 0,
+
+            last_error TEXT,
+            failed_at TEXT,
+
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+            FOREIGN KEY (job_definition_id)
+                REFERENCES job_definitions(id)
+        );
+    `);
+
+    sqlite.run(`
+        CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            task_definition_id TEXT,
+            task_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            priority INTEGER DEFAULT 0,
+            payload TEXT,
+            attempts INTEGER DEFAULT 0,
+            max_attempts INTEGER DEFAULT 5,
+            run_after TEXT,
+            depends_on_task_id TEXT,
+            worker_id TEXT,
+            claimed_at TEXT,
+            started_at TEXT,
+            completed_at TEXT,
+            failed_at TEXT,
+            last_error TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+            FOREIGN KEY (job_id)
+                REFERENCES jobs(id)
+                ON DELETE CASCADE,
+
+            FOREIGN KEY (task_definition_id)
+                REFERENCES job_definition_tasks(id)
+        );
     `);
 
 
     sqlite.run(`
-       CREATE TABLE IF NOT EXISTS sites (
+        CREATE TABLE IF NOT EXISTS subtasks (
+            id TEXT PRIMARY KEY,
+            parent_task_type TEXT NOT NULL,
+            script_path TEXT NOT NULL,
+            task_order INTEGER DEFAULT 0,
+            enabled INTEGER DEFAULT 1,
+            description TEXT,
+
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+
+    sqlite.run(`
+        CREATE TABLE IF NOT EXISTS sites (
             site_id TEXT PRIMARY KEY,
             display_name TEXT,
             web_url TEXT,
@@ -74,17 +162,18 @@ sqlite.serialize(() => {
 
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            last_error TEXT,
+            last_error TEXT, subscription_id TEXT, subscription_expires_at TEXT, subscription_status TEXT DEFAULT 'none',
 
             FOREIGN KEY (site_id) REFERENCES sites(site_id)
                 ON DELETE CASCADE
+        
         );
     `);
 
 
     sqlite.run(`
        CREATE TABLE IF NOT EXISTS files (
-            file_id TEXT PRIMARY KEY,
+           file_id TEXT PRIMARY KEY,
 
             site_id TEXT NOT NULL,
             drive_id TEXT NOT NULL,
@@ -92,8 +181,6 @@ sqlite.serialize(() => {
             name TEXT,
             web_url TEXT,
 
-            mime_type TEXT,
-            size INTEGER,
             last_modified TEXT,
             status TEXT,
 
@@ -103,7 +190,7 @@ sqlite.serialize(() => {
             needs_enrichment INTEGER DEFAULT 1,
 
             last_scanned_at TEXT,
-            last_seen_run_id TEXT,
+            last_seen_task_id TEXT,
 
             FOREIGN KEY (site_id) REFERENCES sites(site_id),
             FOREIGN KEY (drive_id) REFERENCES drives(drive_id)
@@ -111,25 +198,12 @@ sqlite.serialize(() => {
     `);
 
 
-    sqlite.run(`
-        CREATE TABLE IF NOT EXISTS scan_runs (
-            id TEXT PRIMARY KEY,
-            type TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'running',
-            total_jobs INTEGER DEFAULT 0,
-            completed_jobs INTEGER DEFAULT 0,
-
-            started_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            completed_at TEXT
-        );
-    `);
-
 
     sqlite.run(`
-       CREATE TABLE IF NOT EXISTS scan_events (
+       CREATE TABLE IF NOT EXISTS audit_log (
             id TEXT PRIMARY KEY,
 
-            scan_run_id TEXT,
+            job_id TEXT,
             site_id TEXT,
             drive_id TEXT,
             file_id TEXT,
@@ -148,7 +222,7 @@ sqlite.serialize(() => {
 
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
-            FOREIGN KEY (scan_run_id) REFERENCES scan_runs(id),
+            FOREIGN KEY (job_id) REFERENCES jobs(id),
             FOREIGN KEY (site_id) REFERENCES sites(site_id),
             FOREIGN KEY (drive_id) REFERENCES drives(drive_id),
             FOREIGN KEY (file_id) REFERENCES files(file_id)
@@ -169,39 +243,48 @@ sqlite.serialize(() => {
         );
     `);
 
+    sqlite.run(`
+        CREATE TABLE IF NOT EXISTS schedules (
+            id TEXT PRIMARY KEY,
 
-    sqlite.run(`
-        CREATE INDEX IF NOT EXISTS idx_files_drive_id ON files(drive_id);
-    `);
-    sqlite.run(`
-        CREATE INDEX IF NOT EXISTS idx_files_needs_enrichment ON files(needs_enrichment);
-    `);
-    sqlite.run(`
-       CREATE INDEX IF NOT EXISTS idx_files_drive_enrichment ON files(drive_id, needs_enrichment);
+            name TEXT NOT NULL,
+
+            job_definition_id TEXT NOT NULL,
+
+            interval_ms INTEGER NOT NULL,
+
+            enabled INTEGER DEFAULT 1,
+
+            last_run_at TEXT,
+            next_run_at TEXT,
+
+            last_status TEXT,
+
+            failure_count INTEGER DEFAULT 0,
+
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+            FOREIGN KEY (job_definition_id)
+                REFERENCES job_definitions(id)
+        );
     `);
 
-    sqlite.run(`
-       CREATE INDEX IF NOT EXISTS idx_drives_site_id ON drives(site_id);
-    `);
-    sqlite.run(`
-       CREATE INDEX IF NOT EXISTS idx_drives_status ON drives(status);
-    `);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);`);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_tasks_job_id ON tasks(job_id);`);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_tasks_depends ON tasks(depends_on_task_id);`);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_tasks_worker  ON tasks(worker_id);`);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_schedules_next_run ON schedules(next_run_at);`);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_files_drive_id ON files(drive_id);`);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_files_needs_enrichment ON files(needs_enrichment);`);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_files_drive_enrichment ON files(drive_id, needs_enrichment);`);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_drives_site_id ON drives(site_id);`);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_drives_status ON drives(status);`);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_audit_log_file_id ON audit_log(file_id);`);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority, run_after);`);
+    sqlite.run(`CREATE INDEX IF NOT EXISTS idx_subtasks_parent ON subtasks(parent_task_type, enabled, task_order);`);
 
-    sqlite.run(`
-       CREATE INDEX IF NOT EXISTS idx_scan_events_run_id ON scan_events(scan_run_id);
-    `);
-    sqlite.run(`
-       CREATE INDEX IF NOT EXISTS idx_scan_events_file_id ON scan_events(file_id);
-    `);
-
-    sqlite.run(`
-        INSERT OR IGNORE INTO script_registry (
-                job_type,
-                script_path,
-                enabled,
-                version,
-                description
-            )
+    sqlite.run(` INSERT OR IGNORE INTO script_registry (job_type, script_path, enabled, version, description)
             VALUES (
                 'discover_sites',
                 './scripts/discoverSites.js',
@@ -212,14 +295,7 @@ sqlite.serialize(() => {
     `);
 
     sqlite.run(`
-       
-            INSERT OR IGNORE INTO script_registry (
-                job_type,
-                script_path,
-                enabled,
-                version,
-                description
-            )
+            INSERT OR IGNORE INTO script_registry (job_type, script_path, enabled, version, description)
             VALUES (
                 'discover_drives',
                 './scripts/discoverDrives.js',
@@ -230,13 +306,7 @@ sqlite.serialize(() => {
     `);
 
     sqlite.run(`
-      INSERT OR IGNORE INTO script_registry (
-                job_type,
-                script_path,
-                enabled,
-                version,
-                description
-            )
+      INSERT OR IGNORE INTO script_registry (job_type, script_path, enabled, version, description)
             VALUES (
                 'scan_drive',
                 './scripts/scanDrive.js',
@@ -247,13 +317,7 @@ sqlite.serialize(() => {
     `);
 
     sqlite.run(`
-      INSERT OR IGNORE INTO script_registry (
-                job_type,
-                script_path,
-                enabled,
-                version,
-                description
-            )
+      INSERT OR IGNORE INTO script_registry (job_type, script_path, enabled, version, description)
             VALUES (
                 'enrich_drive',
                 './scripts/enrichDrive.js',

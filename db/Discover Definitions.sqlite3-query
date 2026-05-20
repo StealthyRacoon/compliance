@@ -1,0 +1,102 @@
+-- database: ./database.db
+
+SELECT * FROM schedules;
+
+
+
+
+
+
+INSERT INTO job_definitions (
+    id,
+    name,
+    description
+)
+VALUES (
+    'job_discovery',
+    'Discovery Pipeline',
+    'Discover sites and drives every 24 hours'
+);
+
+INSERT INTO job_definition_tasks (
+    id,
+    job_definition_id,
+    task_type,
+    task_order
+)
+VALUES (
+    'taskdef_discover_sites',
+    'job_discovery',
+    'discover_sites',
+    1
+);
+
+INSERT INTO job_definition_tasks (
+    id,
+    job_definition_id,
+    task_type,
+    task_order
+)
+VALUES (
+    'taskdef_discover_drives',
+    'job_discovery',
+    'discover_drives',
+    2
+);
+
+INSERT INTO schedules (
+    id,
+    name,
+    job_definition_id,
+    interval_ms,
+    enabled,
+    next_run_at
+)
+VALUES (
+    'schedule_discovery_daily',
+    'Daily Discovery',
+    'job_discovery',
+    86400000,
+    1,
+    datetime('now', '-1 minute')
+);
+
+INSERT INTO subtasks (
+    id,
+    parent_task_type,
+    script_path,
+    task_order,
+    enabled,
+    description
+)
+VALUES (
+    'subtask_discover_sites_to_drives',
+    'discover_sites',
+    './subtasks/discoverSitesToDrives.js',
+    1,
+    1,
+    'Creates discover_drives tasks for every discovered site'
+);
+
+
+SELECT *
+FROM schedules
+WHERE enabled = 1
+AND next_run_at <= datetime('now');
+
+
+DELETE FROM sites;
+DELETE FROM drives;
+DELETE FROM Tasks;
+DELETE FROM schedules;
+DELETE FROM jobs;
+
+
+DROP TABLE jobs;
+DROP TABLE job_definition_tasks;
+DROP TABLE job_definitions;
+DROP TABLE schedules;
+DROP TABLE tasks;
+DROP TABLE subtasks;
+DROP TABLE scan_events;
+DROP TABLE scan_runs;

@@ -13,7 +13,7 @@
     "webhook": "nodemon services/app.js",
     "ngrok": "ngrok http 3001",
     "scheduler": "nodemon scheduler/scheduler.js",
-    "dev": "concurrently \"npm start\" \"npm run webhook\" \"npm run ngrok\""
+    "dev": "concurrently \"npm start\" \"npm run webhook\" \"npm run ngrok\" \"npm run scheduler\" "
   },
   "dependencies": {
     "@azure/identity": "^4.13.1",

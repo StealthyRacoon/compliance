@@ -2,49 +2,6 @@ const { graphGetRaw } = require("../utils/graph");
 const { v4: uuid } = require("uuid");
 
 // --------------------------------------------------
-// CONFIG
-// --------------------------------------------------
-
-const CONCURRENCY = 4;
-
-// --------------------------------------------------
-// SIMPLE CONCURRENCY POOL
-// --------------------------------------------------
-
-async function runPool(items, handler) {
-
-    const executing = new Set();
-    let index = 0;
-
-    async function next() {
-
-        if (index >= items.length) return;
-
-        const item = items[index++];
-
-        const p = Promise.resolve()
-            .then(() => handler(item))
-            .catch(err => {
-                console.error("🔥 ITEM FAILED:", err.message);
-            })
-            .finally(() => {
-                executing.delete(p);
-            });
-
-        executing.add(p);
-
-        if (executing.size >= CONCURRENCY) {
-            await Promise.race(executing);
-        }
-
-        return next();
-    }
-
-    await next();
-    await Promise.all(executing);
-}
-
-// --------------------------------------------------
 // MAIN
 // --------------------------------------------------
 
@@ -53,25 +10,6 @@ module.exports = async function run(job, { db, payload }) {
     const site_id = payload.site_id;
     const drive_id = payload.drive_id;
 
-    const scanRunId = job.scan_run_id || uuid();
-    const createdNewRun = !job.scan_run_id;
-
-    if (createdNewRun) {
-
-        await db.execute(`
-        INSERT INTO scan_runs (
-                id,
-                type,
-                status
-            )
-            VALUES (
-                ?,
-                'scan_drive',
-                'running'
-            )
-        `, [scanRunId]);
-    }
-
     if (!site_id || !drive_id) {
         return {
             success: false,
@@ -79,8 +17,27 @@ module.exports = async function run(job, { db, payload }) {
         };
     }
 
+    const scanRunId = job.scan_run_id || uuid();
+    const createdNewRun = !job.scan_run_id;
+
     // --------------------------------------------------
-    // LOAD CURRENT DELTA LINK FROM DB
+    // CREATE SCAN RUN (ONLY ONCE)
+    // --------------------------------------------------
+
+    if (createdNewRun) {
+        await db.execute(`
+            INSERT INTO scan_runs (
+                id,
+                type,
+                status,
+                started_at
+            )
+            VALUES (?, 'scan_drive', 'running', datetime('now'))
+        `, [scanRunId]);
+    }
+
+    // --------------------------------------------------
+    // GET DELTA STATE
     // --------------------------------------------------
 
     const driveRow = await db.get(`
@@ -90,27 +47,15 @@ module.exports = async function run(job, { db, payload }) {
         LIMIT 1
     `, [drive_id]);
 
-    const existingDeltaLink =
-        driveRow?.delta_link || null;
-
-    // --------------------------------------------------
-    // DETERMINE START URL
-    // --------------------------------------------------
+    const existingDeltaLink = driveRow?.delta_link || null;
 
     let nextUrl =
         existingDeltaLink ||
         `https://graph.microsoft.com/v1.0/drives/${drive_id}/root/delta?$top=999`;
 
-    console.log("\n━━━━━━━━━━━━━━━━━━━━━━");
-    console.log("🚀 scanDrive START");
-    console.log("📀 Drive:", drive_id);
-    console.log("🏷 Site:", site_id);
-    console.log(
-        existingDeltaLink
-            ? "🔁 Resuming from delta link"
-            : "🆕 Starting fresh full scan"
-    );
-    console.log("━━━━━━━━━━━━━━━━━━━━━━\n");
+    console.log("\n🚀 scanDrive START");
+    console.log("Drive:", drive_id);
+    console.log(existingDeltaLink ? "Resuming delta" : "Fresh scan");
 
     let processed = 0;
     let finalDeltaLink = existingDeltaLink;
@@ -118,8 +63,6 @@ module.exports = async function run(job, { db, payload }) {
     try {
 
         while (nextUrl) {
-
-            console.log("🌐 Fetch:", nextUrl);
 
             const data = await graphGetRaw(nextUrl);
 
@@ -129,27 +72,11 @@ module.exports = async function run(job, { db, payload }) {
                 data["@odata.deltaLink"] ||
                 finalDeltaLink;
 
-            console.log("📦 Items:", items.length);
-
-            // --------------------------------------------------
-            // FILES ONLY
-            // --------------------------------------------------
-
             const files = items.filter(i => i.file);
 
-            // --------------------------------------------------
-            // PROCESS FILES
-            // --------------------------------------------------
-
-            await runPool(files, async (item) => {
+            for (const item of files) {
 
                 const file_id = `${site_id}:${drive_id}:${item.id}`;
-
-                const rawData = { ...item };
-
-                // --------------------------------------------------
-                // CHECK EXISTING FILE (for event classification)
-                // --------------------------------------------------
 
                 const existing = await db.get(`
                     SELECT file_id
@@ -163,7 +90,7 @@ module.exports = async function run(job, { db, payload }) {
                     : "file_discovered";
 
                 // --------------------------------------------------
-                // UPSERT FILE STATE
+                // UPSERT FILE
                 // --------------------------------------------------
 
                 await db.execute(`
@@ -175,24 +102,21 @@ module.exports = async function run(job, { db, payload }) {
                         web_url,
                         last_modified,
                         raw_data,
-                        metadata,
                         needs_enrichment,
                         status,
                         last_seen_run_id,
                         last_scanned_at
                     )
-                    VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, NULL, 1,
-                        'scanned', ?, datetime('now')
-                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'scanned', ?, datetime('now'))
                     ON CONFLICT(file_id) DO UPDATE SET
                         name = excluded.name,
                         web_url = excluded.web_url,
                         last_modified = excluded.last_modified,
                         raw_data = excluded.raw_data,
                         needs_enrichment = 1,
-                        status = excluded.status,
-                        last_scanned_at = excluded.last_scanned_at
+                        status = 'scanned',
+                        last_scanned_at = datetime('now'),
+                        last_seen_run_id = excluded.last_seen_run_id
                 `, [
                     file_id,
                     site_id,
@@ -200,12 +124,12 @@ module.exports = async function run(job, { db, payload }) {
                     item.name || null,
                     item.webUrl || null,
                     item.lastModifiedDateTime || null,
-                    JSON.stringify(rawData),
+                    JSON.stringify(item),
                     scanRunId
                 ]);
 
                 // --------------------------------------------------
-                // SCAN EVENT (FULL HISTORY)
+                // AUDIT LOG
                 // --------------------------------------------------
 
                 await db.execute(`
@@ -230,7 +154,6 @@ module.exports = async function run(job, { db, payload }) {
                         ?,
                         ?,
                         ?,
-                        
                         datetime('now')
                     )
                 `, [
@@ -238,24 +161,17 @@ module.exports = async function run(job, { db, payload }) {
                     site_id,
                     drive_id,
                     file_id,
-
                     eventType,
-
                     item.name || null,
                     item.parentReference?.path || null,
                     item.file?.mimeType || null,
-
-                    JSON.stringify({
-                        webUrl: item.webUrl || null,
-                        lastModified: item.lastModifiedDateTime || null
-                    })
+                    item.size || null
                 ]);
 
                 processed++;
-            });
+            }
 
-            nextUrl =
-                data["@odata.nextLink"] || null;
+            nextUrl = data["@odata.nextLink"] || null;
         }
 
         // --------------------------------------------------
@@ -263,13 +179,9 @@ module.exports = async function run(job, { db, payload }) {
         // --------------------------------------------------
 
         if (finalDeltaLink) {
-
-            console.log("💾 Saving delta link");
-
             await db.execute(`
                 UPDATE drives
                 SET delta_link = ?,
-                    status = 'done',
                     updated_at = datetime('now')
                 WHERE drive_id = ?
             `, [
@@ -278,80 +190,20 @@ module.exports = async function run(job, { db, payload }) {
             ]);
         }
 
-        console.log("\n✅ DELTA SCAN DONE");
-        console.log("📦 Files processed:", processed);
+        // --------------------------------------------------
+        // COMPLETE SCAN RUN
+        // --------------------------------------------------
 
         if (createdNewRun) {
-
             await db.execute(`
-        UPDATE scan_runs
-        SET status = 'completed',
-            completed_at = datetime('now')
-        WHERE id = ?
-    `, [scanRunId]);
+                UPDATE scan_runs
+                SET status = 'completed',
+                    completed_at = datetime('now')
+                WHERE id = ?
+            `, [scanRunId]);
         }
 
-
-        // --------------------------------------------------
-        // CREATE ENRICHMENT JOB
-        // --------------------------------------------------
-
-        if (processed > 0) {
-
-            const existingEnrichJob = await db.get(`
-                SELECT id
-                FROM jobs
-                WHERE type = 'enrich_drive'
-                AND status IN ('pending', 'running')
-                AND json_extract(payload, '$.drive_id') = ?
-                LIMIT 1
-            `, [drive_id]);
-
-            // if (!existingEnrichJob) {
-
-            //     const enrichJobId = uuid();
-
-            //     await db.execute(`
-            //         INSERT INTO jobs (
-            //             id,
-            //             type,
-            //             status,
-            //             payload,
-            //             scan_run_id,
-            //             created_at,
-            //             updated_at
-            //         )
-            //         VALUES (
-            //             ?,
-            //             'enrich_drive',
-            //             'pending',
-            //             ?,
-            //             ?,
-            //             datetime('now'),
-            //             datetime('now')
-            //         )
-            //     `, [
-            //         enrichJobId,
-            //         JSON.stringify({
-            //             site_id,
-            //             drive_id
-            //         }),
-            //         scanRunId
-            //     ]);
-
-            //     console.log(
-            //         "📦 Enrichment job queued:",
-            //         enrichJobId
-            //     );
-
-            // } else {
-
-            //     console.log(
-            //         "⏭ Enrichment job already exists for drive:",
-            //         drive_id
-            //     );
-            // }
-        }
+        console.log("✅ scanDrive DONE. Files:", processed);
 
         return {
             success: true,

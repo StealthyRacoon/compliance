@@ -1,16 +1,19 @@
 const { graphGetAllPages } = require("../utils/graph");
-const { v4: uuid } = require("uuid");
 
-module.exports = async function run(job, { db, payload }) {
+// --------------------------------------------------
+// MAIN
+// --------------------------------------------------
+
+module.exports = async function run(task, { db, payload }) {
 
     const site_id = payload.site_id;
-    const scanRunId = job.scan_run_id;
+
+    console.log("Payload: ", payload)
 
     if (!site_id) {
         return {
             success: false,
-            error: "Missing site_id",
-            data: null
+            error: "Missing site_id"
         };
     }
 
@@ -24,15 +27,17 @@ module.exports = async function run(job, { db, payload }) {
 
         console.log("📀 DRIVES FOUND:", drives?.length || 0);
 
-        // let processed = 0;
+        // --------------------------------------------------
+        // UPSERT DRIVES
+        // --------------------------------------------------
 
         for (const drive of drives || []) {
 
             try {
 
-                // --------------------------------------------------
-                // UPSERT DRIVE
-                // --------------------------------------------------
+                if (drive.webUrl.includes("/PreservationHoldLibrary")) {
+                    continue;
+                }
 
                 await db.execute(`
                     INSERT INTO drives (
@@ -41,12 +46,19 @@ module.exports = async function run(job, { db, payload }) {
                         drive_name,
                         web_url,
                         status,
-                        delta_link
+                        delta_link,
+                        created_at,
+                        updated_at
                     )
-                    VALUES (?, ?, ?, ?, 'pending', NULL)
+                    VALUES (
+                        ?, ?, ?, ?, 'pending', NULL,
+                        datetime('now'),
+                        datetime('now')
+                    )
                     ON CONFLICT(drive_id) DO UPDATE SET
                         drive_name = excluded.drive_name,
-                        web_url = excluded.web_url
+                        web_url = excluded.web_url,
+                        updated_at = datetime('now')
                 `, [
                     drive.id,
                     site_id,
@@ -54,70 +66,87 @@ module.exports = async function run(job, { db, payload }) {
                     drive.webUrl || null
                 ]);
 
-                // --------------------------------------------------
-                // CHECK FOR EXISTING JOB
-                // --------------------------------------------------
-
-                const existingJob = await db.get(`
-                    SELECT id
-                    FROM jobs
-                    WHERE type = 'scan_drive'
-                      AND status IN ('pending', 'running')
-                      AND json_extract(payload, '$.drive_id') = ?
-                    LIMIT 1
-                `, [drive.id]);
-
-                if (existingJob) continue;
-
-                // --------------------------------------------------
-                // CREATE SCAN JOB
-                // --------------------------------------------------
-
-                // await db.execute(`
-                //     INSERT INTO jobs (
-                //         id,
-                //         type,
-                //         status,
-                //         payload,
-                //         scan_run_id
-                //     )
-                //     VALUES (?, 'scan_drive', 'pending', ?, ?)
-                // `, [
-                //     uuid(),
-                //     JSON.stringify({
-                //         site_id,
-                //         drive_id: drive.id,
-                //         delta_link: null
-                //     }),
-                //     scanRunId
-                // ]);
-
-                // processed++;
 
             } catch (err) {
 
-                console.error("🔥 DRIVE PROCESS FAILED:", err.message);
+                console.log(`INSERT INTO drives (
+                        drive_id,
+                        site_id,
+                        drive_name,
+                        web_url,
+                        status,
+                        delta_link,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (
+                        ?, ?, ?, ?, 'pending', NULL,
+                        datetime('now'),
+                        datetime('now')
+                    )
+                    ON CONFLICT(drive_id) DO UPDATE SET
+                        drive_name = excluded.drive_name,
+                        web_url = excluded.web_url,
+                        updated_at = datetime('now')
+                `, [
+                    drive.id,
+                    site_id,
+                    drive.name || null,
+                    drive.webUrl || null
+                ])
+
+                if (err.response?.status === 423) {
+
+                    await db.execute(`
+                        UPDATE tasks
+                        SET status = 'pending',
+                            run_after = datetime('now', '+5 minutes'),
+                            updated_at = datetime('now'),
+                            last_error = ?
+                        WHERE id = ?
+                    `, [
+                        err.message,
+                        task.id
+                    ]);
+
+                    continue;
+                }
+
+                console.error(
+                    "🔥 DRIVE UPSERT FAILED:",
+                    drive.id,
+                    err.message
+                );
             }
         }
+
+        // --------------------------------------------------
+        // RETURN DRIVES FOR SUBTASK EXPANSION
+        // --------------------------------------------------
 
         return {
             success: true,
             data: {
                 site_id,
-                scanRunId,
                 drivesFound: drives?.length || 0,
-                // drivesProcessed: processed
+                drives: (drives || []).map(drive => ({
+                    drive_id: drive.id,
+                    site_id,
+                    drive_name: drive.name || null
+                }))
             }
         };
 
     } catch (err) {
 
-        console.error("🔥 SCRIPT FAILED:", err);
+        console.error("🔥 SCRIPT FAILED:", err.message);
 
         return {
             success: false,
             error: err.message,
-            data: { site_id }
+            data: {
+                site_id
+            }
         };
     }
 };

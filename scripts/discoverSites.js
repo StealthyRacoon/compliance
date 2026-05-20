@@ -9,14 +9,14 @@ module.exports = async function run(job, { db }) {
 
     const runId = uuid();
 
-    await db.execute(`
-        INSERT INTO scan_runs (
-            id,
-            type,
-            status
-        )
-        VALUES (?, 'full_scan', 'running')
-    `, [runId]);
+    // await db.execute(`
+    //     INSERT INTO scan_runs (
+    //         id,
+    //         type,
+    //         status
+    //     )
+    //     VALUES (?, 'full_scan', 'running')
+    // `, [runId]);
 
     // --------------------------------------------------
     // FETCH SITES
@@ -31,7 +31,7 @@ module.exports = async function run(job, { db }) {
         : (raw?.value ?? []);
 
     const filtered = sites.filter(
-        s => !s.webUrl?.includes("/personal/")
+        s => !s.webUrl?.includes("/personal/") && !s.webUrl.includes("/PreservationHoldLibrary")
     );
 
     // let jobsCreated = 0;
@@ -44,32 +44,32 @@ module.exports = async function run(job, { db }) {
 
         // UPSERT SITE (current state only)
         await db.execute(`
-    INSERT INTO sites (
-        site_id,
-        display_name,
-        web_url
-    )
-    VALUES (?, ?, ?)
-    ON CONFLICT(site_id) DO UPDATE SET
-        display_name = excluded.display_name,
-        web_url = excluded.web_url
-`, [
+            INSERT INTO sites (
+                site_id,
+                display_name,
+                web_url
+            )
+            VALUES (?, ?, ?)
+            ON CONFLICT(site_id) DO UPDATE SET
+                display_name = excluded.display_name,
+                web_url = excluded.web_url
+        `, [
             site.id,
             site.displayName || null,
             site.webUrl || null
         ]);
 
         // CHECK FOR EXISTING DISCOVER_DRIVES JOB
-        const existingJob = await db.get(`
-            SELECT id
-            FROM jobs
-            WHERE type = 'discover_drives'
-              AND status IN ('pending', 'running')
-              AND json_extract(payload, '$.siteId') = ?
-            LIMIT 1
-        `, [site.id]);
+        // const existingJob = await db.get(`
+        //     SELECT id
+        //     FROM jobs
+        //     WHERE type = 'discover_drives'
+        //       AND status IN ('pending', 'running')
+        //       AND json_extract(payload, '$.siteId') = ?
+        //     LIMIT 1
+        // `, [site.id]);
 
-        if (existingJob) continue;
+        // if (existingJob) continue;
 
         // // CREATE DISCOVER_DRIVES JOB (linked to scan run)
         // await db.execute(`
@@ -101,6 +101,7 @@ module.exports = async function run(job, { db }) {
         data: {
             scanRunId: runId,
             sitesProcessed: filtered.length,
+            sites: filtered
             // discoverDriveJobsCreated: jobsCreated
         }
     };

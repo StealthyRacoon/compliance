@@ -77,38 +77,7 @@ async function getWebhookAccessToken() {
 const sleep = (ms) =>
     new Promise(r => setTimeout(r, ms));
 
-async function createDriveSubscription(driveId) {
 
-    const token = await getAccessToken();
-
-    // 1 hour from now
-    const expiration = new Date(
-        Date.now() + 60 * 60 * 1000
-    ).toISOString();
-
-    console.log({
-        notificationUrl:
-            `${process.env.PUBLIC_WEBHOOK_URL}/webhooks/sharepoint`
-    });
-
-    const response = await axios.post(
-        "https://graph.microsoft.com/v1.0/subscriptions",
-        {
-            changeType: "updated",
-            notificationUrl: `${process.env.PUBLIC_WEBHOOK_URL}/webhooks/sharepoint`,
-            resource: `/drives/${driveId}/root`,
-            expirationDateTime: expiration,
-            clientState: `${process.env.CLIENT_SECRET}`
-        },
-        {
-            headers: {
-                Authorization: `Bearer ${token}`
-            }
-        }
-    );
-
-    return response.data;
-}
 
 // --------------------------------------------------
 // SAFE GRAPH REQUEST
@@ -259,5 +228,4 @@ module.exports = {
     graphPost,
     graphGetAllPages,
     getWebhookAccessToken,
-    createDriveSubscription
 };

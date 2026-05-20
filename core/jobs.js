@@ -1,7 +1,8 @@
 const db = require("../db/db");
-const { sqlite } = require("../db/db");
 const { v4: uuid } = require("uuid");
 
+// --------------------------------------------------
+// CLAIM JOB (still used only for task generation / orchestration triggers)
 // --------------------------------------------------
 
 async function claimJob() {
@@ -9,7 +10,7 @@ async function claimJob() {
     const job = await db.get(`
         UPDATE jobs
         SET status = 'running',
-            attempts = attempts + 1,
+            attempts = COALESCE(attempts, 0) + 1,
             updated_at = datetime('now')
         WHERE id = (
             SELECT id
@@ -23,29 +24,90 @@ async function claimJob() {
 
     if (!job) return null;
 
-    try {
-        job.payload = job.payload
-            ? JSON.parse(job.payload)
-            : {};
-    } catch {
-        job.payload = {};
-    }
+    job.payload = safeParse(job.payload);
 
     return job;
 }
 
 // --------------------------------------------------
+// CREATE JOB
+// --------------------------------------------------
 
-async function completeJob(id) {
+async function createJob(type, payload = {}) {
 
-    return db.execute(`
+    const jobId = uuid();
+    const now = new Date().toISOString();
+
+    await db.execute(`
+        INSERT INTO jobs (
+            id,
+            job_definition_id,
+            job_type,
+            status,
+            payload,
+            attempts,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, 'pending', ?, 0, ?, ?)
+    `, [
+        jobId,
+        payload.job_definition_id || null,
+        type,
+        JSON.stringify(payload),
+        now,
+        now
+    ]);
+
+    return {
+        success: true,
+        jobId
+    };
+}
+
+// --------------------------------------------------
+// JOB COMPLETION CHECKER (CORE LOGIC)
+// --------------------------------------------------
+
+async function checkJobCompletion(jobId) {
+
+    const summary = await db.get(`
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN status IN ('pending', 'running') THEN 1 ELSE 0 END) AS active
+        FROM tasks
+        WHERE job_id = ?
+    `, [jobId]);
+
+    if (!summary || summary.total === 0) return;
+
+    // still running
+    if (summary.active > 0) return;
+
+    // failure wins
+    if (summary.failed > 0) {
+        await db.execute(`
+            UPDATE jobs
+            SET status = 'failed',
+                updated_at = datetime('now')
+            WHERE id = ?
+        `, [jobId]);
+
+        return;
+    }
+
+    // success
+    await db.execute(`
         UPDATE jobs
         SET status = 'completed',
             updated_at = datetime('now')
         WHERE id = ?
-    `, [id]);
+    `, [jobId]);
 }
 
+// --------------------------------------------------
+// JOB FAILURE (rare, usually not used anymore)
 // --------------------------------------------------
 
 async function failJob(jobId, error) {
@@ -61,86 +123,27 @@ async function failJob(jobId, error) {
 }
 
 // --------------------------------------------------
+// HELPERS
+// --------------------------------------------------
 
-async function createJob(type, payload = {}, options = {}) {
-
-    const jobId = uuid();
-
-    const now = new Date().toISOString();
-
-    if (payload.scan_run_id) {
-        await db.execute(`
-            UPDATE scan_runs
-            SET total_jobs = COALESCE(total_jobs, 0) + 1
-            WHERE id = ?
-        `, [payload.scan_run_id]);
+function safeParse(payload) {
+    try {
+        if (!payload) return {};
+        return typeof payload === "string"
+            ? JSON.parse(payload)
+            : payload;
+    } catch {
+        return {};
     }
-
-    // --------------------------------------------------
-    // OPTIONAL DEDUPLICATION (important for scan/enrich)
-    // --------------------------------------------------
-
-    if (options.uniqueKey) {
-
-        const existing = await db.get(`
-            SELECT id
-            FROM jobs
-            WHERE type = ?
-              AND status IN ('pending', 'running')
-              AND json_extract(payload, ?) = ?
-            LIMIT 1
-        `, [
-            type,
-            options.uniqueKey.path,
-            options.uniqueKey.value
-        ]);
-
-        if (existing) {
-            return {
-                success: true,
-                skipped: true,
-                jobId: existing.id
-            };
-        }
-    }
-
-    // --------------------------------------------------
-    // INSERT JOB
-    // --------------------------------------------------
-
-    await db.execute(`
-        INSERT INTO jobs (
-            id,
-            type,
-            status,
-            payload,
-            attempts,
-            created_at,
-            updated_at,
-            scan_run_id
-        )
-        VALUES (
-            ?, ?, 'pending', ?, 0, ?, ?, ?
-        )
-    `, [
-        jobId,
-        type,
-        JSON.stringify(payload),
-        now,
-        now,
-        payload.scan_run_id || null
-    ]);
-
-    return {
-        success: true,
-        jobId
-    };
 }
 
+// --------------------------------------------------
+// EXPORTS (FIXED)
+// --------------------------------------------------
 
 module.exports = {
     claimJob,
-    completeJob,
+    createJob,
     failJob,
-    createJob
+    checkJobCompletion
 };
